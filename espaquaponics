@@ -1,0 +1,204 @@
+#include "secrets.h"
+#include <WiFiClientSecure.h>
+#include <MQTTClient.h>
+#include "WiFi.h"
+#include "DHT.h"
+#include <ESP32Servo.h>
+#include <ArduinoJson.h>
+#define DHTPIN 4        // Digital pin connected to the DHT sensor
+#define DHTTYPE DHT11   // DHT 11
+#define water_level_pin 32  //Analog pin connected to the water_level sensor
+#define Pump_pin 23
+#define turbidity_pin 36
+#define temperature_pin 19
+#define feeder_pin 21
+#define phsensor_pin 39
+#define AWS_IOT_PUBLISH_TOPIC   "Aquaponics"
+#define AWS_IOT_SUBSCRIBE_TOPIC "ESPaqua"
+
+ 
+Servo myservo; 
+DHT dht(DHTPIN, DHTTYPE);
+float Humidity ;
+int turbidity;
+String waterLevel;
+float Temperature;
+String Turbidity;
+unsigned long lastMillis = 0;
+
+
+WiFiClientSecure net = WiFiClientSecure();
+MQTTClient client = MQTTClient();
+void connectAWS()
+{
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+  Serial.println("\n\n=====================");
+  Serial.println("Connecting to Wi-Fi: ");
+   Serial.println(WIFI_SSID);
+  Serial.println("=====================\n");
+
+  while (WiFi.status() != WL_CONNECTED){
+    delay(2000);
+    Serial.print(".");
+  }
+ Serial.println("wifi_connected");
+  // Configure WiFiClientSecure to use the AWS IoT device credentials
+  net.setCACert(AWS_CERT_CA);
+  net.setCertificate(AWS_CERT_CRT);
+  net.setPrivateKey(AWS_CERT_PRIVATE);
+
+  // Connect to the MQTT broker on the AWS endpoint we defined earlier
+  client.begin(AWS_IOT_ENDPOINT, 8883, net);
+  client.setCleanSession(true);
+  client.onMessage(messageHandler);
+  Serial.println("\n\n=====================");
+  Serial.println("Connecting to AWS IOT");
+  Serial.println("=====================\n");
+
+  while (!client.connect(THINGNAME)) {
+    Serial.print(".");
+    delay(1000);
+  }
+
+  if(!client.connected()){
+    Serial.println("AWS IoT Timeout!");
+    ESP.restart();
+    return;
+  }
+  
+  Serial.println("AWS IoT Connected!");
+  Serial.println("=====================\n");
+  Serial.println("----------------------");
+  Serial.println("Thing name:" THINGNAME);
+ Serial.println("publishing Topic:" AWS_IOT_PUBLISH_TOPIC); 
+  Serial.println("Subscribing Topic:" AWS_IOT_SUBSCRIBE_TOPIC);
+  Serial.println("__________________________________");
+ client.subscribe(AWS_IOT_SUBSCRIBE_TOPIC);
+ Serial.println("subscribed");
+ Serial.println("=====================\n\n");
+}
+
+ 
+void messageHandler(String &topic, String &payload)
+{
+
+  Serial.println("________________");
+  Serial.print("incoming from AWS: ");
+  Serial.println(payload);
+  String message = payload;
+  if(message == "1"){
+   Pump_on();
+  }
+    else if (message == "2"){
+      Pump_off();
+  }
+  else if (message == "3"){
+      Feeder_on();
+  }
+     else if (message == "4"){
+      Feeder_off(); }
+}
+void Pump_on(){
+   digitalWrite (Pump_pin, LOW);
+   Serial.println("________________");
+    Serial.println("pump is ON");
+    Serial.println("________________\n");
+   
+}
+ 
+void Pump_off(){
+  digitalWrite (Pump_pin, HIGH);
+  Serial.println("________________");
+    Serial.println("pump is off");
+    Serial.println("________________\n");
+    
+}
+void Feeder_on(){
+  myservo.write(180);
+    Serial.println("________________");
+    Serial.println("feeder opened");
+    Serial.println("________________\n");
+}
+void Feeder_off(){
+  myservo.write(0);
+    Serial.println("________________");
+    Serial.println("feeder closed");
+    Serial.println("________________\n");
+}
+
+void publishMessage()
+{
+  StaticJsonDocument<200> doc;
+  doc["time"] = millis();
+  doc["humidity"] = Humidity;
+  doc["temperature"] = Temperature;
+  doc["water_level"] = waterLevel;
+  doc["turbidity"] = turbidity;
+  char jsonBuffer[512];
+  serializeJson(doc, jsonBuffer); // print to client
+ 
+  client.publish(AWS_IOT_PUBLISH_TOPIC, jsonBuffer);
+}
+
+void setup() {
+  Serial.begin(115200);
+  connectAWS();
+  dht.begin();
+  myservo.attach(feeder_pin);
+  pinMode(water_level_pin,INPUT);
+  pinMode(turbidity_pin,INPUT);
+  pinMode(temperature_pin,INPUT); 
+  pinMode(Pump_pin,OUTPUT);
+  pump_off();
+  myservo.write(0);
+}
+
+void loop() {
+ Humidity = dht.readHumidity();
+
+   if (isnan(h) )  // Check if any reads failed and exit early (to try again).
+  {
+    Serial.println(F("Failed to read from DHT sensor!"));
+    return;
+  }
+ 
+  Serial.print(F("Humidity: "));
+  Serial.print(Humidity);
+  
+  int turbValue = analogRead(turbidity_pin);
+  Serial.println(turbValue);
+  int turbidity = map(turbValue, 0, 750, 100, 0);
+  
+  delay(100);
+  if (turbidity < 20) {
+    Turbidity == "CLEAR ";
+  }
+    Serial.print(" CLEAR ");
+  }
+  if ((turbidity > 20) && (turbidity < 50)) {
+    Turbidity == " CLOUDY ";
+    Serial.print(" CLOUDY ");
+  }
+  if (turbidity > 50) {
+    Turbidity == "DIRTY ";
+    Serial.print("DIRTY ");
+
+   waterLevel = analogRead(water_level_PIN);
+  Serial.print(waterLevel);
+  if (!client.connected())
+  {
+    connectAWS();
+  }
+  else
+  {
+    client.loop();
+    if (millis() - lastMillis > 5000)
+    {
+      lastMillis = millis();
+      publishMessage();
+    
+    }
+  }
+}
